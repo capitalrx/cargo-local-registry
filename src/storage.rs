@@ -1,8 +1,10 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::env;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::path::{self, Path, PathBuf};
 
+use anyhow::Context as _;
 use cargo::core::dependency::DepKind;
 use cargo::core::resolver::Resolve;
 use cargo::core::{Package, SourceId, Workspace};
@@ -14,6 +16,7 @@ use flate2::write::GzEncoder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use tar::{Builder, Header};
+use url::Url;
 
 use crate::utils::{get_index_path, parse_crate_filename};
 
@@ -41,11 +44,6 @@ pub fn determine_registry_delta(
     include_git: bool,
     config: &cargo::util::GlobalContext,
 ) -> CargoResult<RegistryDelta> {
-    use anyhow::Context as _;
-    use cargo::core::Workspace;
-    use std::collections::{BTreeMap, BTreeSet};
-    use std::env;
-
     let projects: Vec<&Path> = projects.iter().map(|p| p.as_ref()).collect();
     let registry_path = registry_path.as_ref();
 
@@ -282,9 +280,6 @@ pub fn sync_crates_to_registry(
     remove_previously_synced: bool,
     config: &GlobalContext,
 ) -> CargoResult<()> {
-    use anyhow::Context as _;
-    use std::env;
-
     let canonical_local_dst = local_dst.canonicalize().unwrap_or(local_dst.to_path_buf());
     let manifest = lockfile.parent().unwrap().join("Cargo.toml");
     let manifest = env::current_dir().unwrap().join(&manifest);
@@ -459,8 +454,6 @@ fn build_ar_from_files(
     pkg_name: &str,
     pkg_version: &str,
 ) -> Result<(), anyhow::Error> {
-    use anyhow::Context as _;
-
     for file_path in files {
         let relative = file_path
             .strip_prefix(pkg_root)
@@ -556,9 +549,6 @@ fn registry_pkg(pkg: &Package, resolve: &Resolve) -> RegistryPackage {
 }
 
 fn read_file_to_string(path: &Path) -> CargoResult<String> {
-    use anyhow::Context as _;
-    use std::io;
-
     let s = (|| -> io::Result<_> {
         let mut contents = String::new();
         let mut f = File::open(path)?;
@@ -574,8 +564,6 @@ pub fn get_crate_from_cache(
     version: &str,
     config: &cargo::util::GlobalContext,
 ) -> CargoResult<PathBuf> {
-    use cargo::core::SourceId;
-
     let registry_id = SourceId::crates_io_maybe_sparse_http(config)?;
     let hash = cargo::util::hex::short_hash(&registry_id);
     let ident = registry_id.url().host().unwrap().to_string();
@@ -786,4 +774,62 @@ pub fn check_registry(
             delta.extra_crates.len()
         );
     }
+}
+
+pub fn create_registry(
+    path: String,
+    sync_lockfile: Option<String>,
+    registry_url: Option<String>,
+    include_git: bool,
+    remove_previously_synced: bool,
+    config: &GlobalContext,
+) -> CargoResult<()> {
+    let path = Path::new(&path);
+    let index = path.join("index");
+
+    fs::create_dir_all(&index)
+        .with_context(|| format!("failed to create index: `{}`", index.display()))?;
+
+    let id = match registry_url {
+        Some(input) => SourceId::for_registry(&Url::parse(&input)?)?,
+        None => SourceId::crates_io_maybe_sparse_http(config)?,
+    };
+
+    let lockfile = match sync_lockfile {
+        Some(file) => file,
+        None => return Ok(()),
+    };
+
+    sync_crates_to_registry(
+        Path::new(&lockfile),
+        path,
+        &id,
+        include_git,
+        remove_previously_synced,
+        config,
+    )
+    .with_context(|| "failed to sync")?;
+
+    let registry_path = config.cwd().join(path);
+    let registry_url = id.url();
+
+    println!(
+        r#"Local registry created successfully!
+
+To use this registry, add this to your .cargo/config.toml:
+
+    [source.crates-io]
+    registry = '{}'
+    replace-with = 'local-registry'
+
+    [source.local-registry]
+    local-registry = '{}'
+
+Note: Source replacement can only be configured via config files,
+not environment variables (per Cargo documentation).
+"#,
+        registry_url,
+        registry_path.display()
+    );
+    Ok(())
 }

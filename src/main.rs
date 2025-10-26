@@ -1,13 +1,8 @@
-use anyhow::Context as _;
-use cargo::core::SourceId;
 use cargo::util::GlobalContext;
-use cargo::util::errors::*;
 use clap::Parser as _;
-use std::fs;
-use std::path::{Path, PathBuf};
-use url::Url;
+use std::path::PathBuf;
 
-use cargo_local_registry::{check_registry, serve_registry, sync_crates_to_registry};
+use cargo_local_registry::{check_registry, create_registry, serve_registry};
 
 const DEFAULT_CRATE_PORT: u16 = 27283;
 
@@ -165,62 +160,4 @@ async fn main() {
     } {
         cargo::exit_with_error(err.into(), &mut config.shell());
     }
-}
-
-fn create_registry(
-    path: String,
-    sync_lockfile: Option<String>,
-    registry_url: Option<String>,
-    include_git: bool,
-    remove_previously_synced: bool,
-    config: &GlobalContext,
-) -> CargoResult<()> {
-    let path = Path::new(&path);
-    let index = path.join("index");
-
-    fs::create_dir_all(&index)
-        .with_context(|| format!("failed to create index: `{}`", index.display()))?;
-
-    let id = match registry_url {
-        Some(input) => SourceId::for_registry(&Url::parse(&input)?)?,
-        None => SourceId::crates_io_maybe_sparse_http(config)?,
-    };
-
-    let lockfile = match sync_lockfile {
-        Some(file) => file,
-        None => return Ok(()),
-    };
-
-    sync_crates_to_registry(
-        Path::new(&lockfile),
-        path,
-        &id,
-        include_git,
-        remove_previously_synced,
-        config,
-    )
-    .with_context(|| "failed to sync")?;
-
-    let registry_path = config.cwd().join(path);
-    let registry_url = id.url();
-
-    println!(
-        r#"Local registry created successfully!
-
-To use this registry, add this to your .cargo/config.toml:
-
-    [source.crates-io]
-    registry = '{}'
-    replace-with = 'local-registry'
-
-    [source.local-registry]
-    local-registry = '{}'
-
-Note: Source replacement can only be configured via config files,
-not environment variables (per Cargo documentation).
-"#,
-        registry_url,
-        registry_path.display()
-    );
-    Ok(())
 }

@@ -9,7 +9,9 @@ use axum::{
 use cargo::util::errors::*;
 use reqwest::Client;
 
-use crate::utils::{get_crates_io_index_url, get_index_path, parse_crate_filename, remove_prior_versions};
+use crate::utils::{
+    get_crates_io_index_url, get_index_path, parse_crate_filename, remove_prior_versions,
+};
 
 pub const DEFAULT_REFRESH_TTL_SECS: u64 = 15 * 60; // 15 minutes
 
@@ -113,8 +115,12 @@ pub async fn serve_index_generic(
 
                 if since_last_check < cache_ttl {
                     tracing::info!(crate_name, elapsed = ?since_last_check, "serving from cache, within ttl");
-                    let mut response = Response::new(axum::body::Body::from(cached.content.clone()));
-                    response.headers_mut().insert(axum::http::header::CONTENT_TYPE, "text/plain".parse().unwrap());
+                    let mut response =
+                        Response::new(axum::body::Body::from(cached.content.clone()));
+                    response.headers_mut().insert(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/plain".parse().unwrap(),
+                    );
                     return Ok(response);
                 } else {
                     tracing::info!(crate_name, elapsed = ?since_last_check, "cache stale, checking upstream availability");

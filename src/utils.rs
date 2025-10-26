@@ -1,5 +1,7 @@
-use semver::Version;
+use std::fs;
 use std::path::{Path, PathBuf};
+
+use semver::Version;
 
 /// Parse a crate filename in the format "{name}-{version}.crate" into its components.
 ///
@@ -77,8 +79,6 @@ pub fn get_crates_io_index_url(crate_name: &str) -> String {
 ///
 /// This is used in "clean" mode to ensure only one version of each crate is stored locally.
 pub fn remove_prior_versions(registry_path: &Path, crate_name: &str, keep_version: &str) {
-    use std::fs;
-
     if let Ok(entries) = fs::read_dir(registry_path) {
         for entry in entries.flatten() {
             let file_name = entry.file_name();
