@@ -49,7 +49,7 @@ pub async fn serve_registry(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to bind to {}:{}: {}", host, port, e))?;
 
-    tracing::info!("Serving registry on http://{}:{}", host, port);
+    tracing::info!(host, port, "starting registry server");
 
     axum::serve(listener, app)
         .await
@@ -63,14 +63,14 @@ pub async fn serve_config(
         ExecutionControl,
     >,
 ) -> Json<serde_json::Value> {
-    tracing::info!("Serving config.json");
+    tracing::info!("serving config endpoint");
     let config = serde_json::json!({
         "dl": format!("{}/{{crate}}-{{version}}.crate", server_url),
         "api": server_url
     });
     tracing::debug!(
-        "Config response: {}",
-        serde_json::to_string_pretty(&config).unwrap()
+        config = %serde_json::to_string_pretty(&config).unwrap(),
+        "returning config response"
     );
     Json(config)
 }
@@ -87,15 +87,11 @@ pub async fn serve_index_generic(
     AxumPath(path): AxumPath<String>,
 ) -> Result<Response, StatusCode> {
     let crate_name = path.split('/').next_back().unwrap_or(&path).to_string();
-    tracing::info!(
-        "Serving index for crate: {} (from path: {})",
-        crate_name,
-        path
-    );
+    tracing::info!(crate_name, path, "serving index request");
     let crate_name = crate_name.to_lowercase();
     let index_path = index::get_index_path(&registry_path, &crate_name);
 
-    tracing::debug!("Looking for index file at: {}", index_path.display());
+    tracing::debug!(index_path = %index_path.display(), "checking local index");
 
     if enable_proxy {
         let should_try_refresh = if let Ok(cache) = index_cache.read() {
@@ -103,9 +99,9 @@ pub async fn serve_index_generic(
                 let since_last_check = cached.last_check.elapsed();
                 if since_last_check < cache_ttl {
                     tracing::info!(
-                        "Serving {} from cache (last checked {:?} ago)",
                         crate_name,
-                        since_last_check
+                        elapsed = ?since_last_check,
+                        "serving from cache, within ttl"
                     );
                     let mut response =
                         Response::new(axum::body::Body::from(cached.content.clone()));
@@ -116,9 +112,9 @@ pub async fn serve_index_generic(
                     return Ok(response);
                 } else {
                     tracing::info!(
-                        "Checking if crates.io is responsive for {} (last checked {:?} ago)",
                         crate_name,
-                        since_last_check
+                        elapsed = ?since_last_check,
+                        "cache stale, checking upstream availability"
                     );
                     true
                 }
@@ -130,7 +126,7 @@ pub async fn serve_index_generic(
         };
 
         if should_try_refresh {
-            tracing::info!("Trying quick fetch from crates.io for {}", crate_name);
+            tracing::info!(crate_name, "attempting fast fetch from upstream");
 
             let crates_io_url = index::get_crates_io_index_url(&crate_name);
 
@@ -144,9 +140,9 @@ pub async fn serve_index_generic(
                 Ok(response) if response.status().is_success() => match response.bytes().await {
                     Ok(content) => {
                         tracing::info!(
-                            "Successfully fetched fresh index for {} from crates.io in <500ms, {} bytes - caching",
                             crate_name,
-                            content.len()
+                            bytes = content.len(),
+                            "upstream fetch succeeded, caching fresh index"
                         );
 
                         if let Ok(mut cache) = index_cache.write() {
@@ -157,7 +153,7 @@ pub async fn serve_index_generic(
                                     last_check: Instant::now(),
                                 },
                             );
-                            tracing::debug!("Cached fresh index for {}", crate_name);
+                            tracing::debug!(crate_name, "updated index cache");
                         }
 
                         let mut response = Response::new(axum::body::Body::from(content));
@@ -168,21 +164,21 @@ pub async fn serve_index_generic(
                         return Ok(response);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to read response from crates.io: {}", e);
+                        tracing::warn!(error = %e, "failed reading upstream response body");
                     }
                 },
                 Ok(response) => {
                     tracing::warn!(
-                        "crates.io returned status {}: {}",
-                        response.status(),
-                        crate_name
+                        status = %response.status(),
+                        crate_name,
+                        "upstream returned non-success status"
                     );
                 }
                 Err(e) => {
                     tracing::info!(
-                        "crates.io timeout or error for {} ({}), using cache",
                         crate_name,
-                        e
+                        error = %e,
+                        "upstream timeout or error, falling back"
                     );
                 }
             }
@@ -191,18 +187,14 @@ pub async fn serve_index_generic(
                 && let Some(cached) = cache.get_mut(&crate_name)
             {
                 cached.last_check = Instant::now();
-                tracing::debug!("Updated last_check for {}", crate_name);
+                tracing::debug!(crate_name, "updated cache timestamp");
             }
         }
     }
 
     match std::fs::read(&index_path) {
         Ok(content) => {
-            tracing::info!(
-                "Serving cached index for {}, {} bytes",
-                crate_name,
-                content.len()
-            );
+            tracing::info!(crate_name, bytes = content.len(), "serving cached index");
             let mut response = Response::new(axum::body::Body::from(content));
             response.headers_mut().insert(
                 axum::http::header::CONTENT_TYPE,
@@ -212,16 +204,13 @@ pub async fn serve_index_generic(
         }
         Err(e) => {
             tracing::warn!(
-                "No local index file for {} and proxy failed: {}",
                 crate_name,
-                e
+                error = %e,
+                "no local index and fast fetch failed"
             );
 
             if enable_proxy {
-                tracing::info!(
-                    "Attempting to proxy index for {} from crates.io",
-                    crate_name
-                );
+                tracing::info!(crate_name, "attempting full proxy to upstream");
 
                 let crates_io_url = index::get_crates_io_index_url(&crate_name);
 
@@ -230,23 +219,23 @@ pub async fn serve_index_generic(
                         match response.bytes().await {
                             Ok(content) => {
                                 tracing::info!(
-                                    "Successfully proxied index for {} from crates.io, {} bytes",
                                     crate_name,
-                                    content.len()
+                                    bytes = content.len(),
+                                    "proxied index from upstream"
                                 );
 
-                                tracing::info!("Caching full index for {} locally", crate_name);
+                                tracing::info!(crate_name, "caching proxied index locally");
 
                                 if let Some(parent) = index_path.parent()
                                     && let Err(e) = std::fs::create_dir_all(parent)
                                 {
-                                    tracing::warn!("Failed to create index directory: {}", e);
+                                    tracing::warn!(error = %e, "failed creating index directory");
                                 }
 
                                 if let Err(e) = std::fs::write(&index_path, &content) {
-                                    tracing::warn!("Failed to cache index file locally: {}", e);
+                                    tracing::warn!(error = %e, "failed writing index cache");
                                 } else {
-                                    tracing::info!("Successfully cached index for {}", crate_name);
+                                    tracing::info!(crate_name, "index cached successfully");
                                 }
 
                                 let mut response = Response::new(axum::body::Body::from(content));
@@ -258,8 +247,8 @@ pub async fn serve_index_generic(
                             }
                             Err(e) => {
                                 tracing::error!(
-                                    "Failed to read response body from crates.io: {}",
-                                    e
+                                    error = %e,
+                                    "failed reading upstream response body"
                                 );
                                 Err(StatusCode::INTERNAL_SERVER_ERROR)
                             }
@@ -267,14 +256,14 @@ pub async fn serve_index_generic(
                     }
                     Ok(response) => {
                         tracing::warn!(
-                            "crates.io returned status {}: {}",
-                            response.status(),
-                            crate_name
+                            status = %response.status(),
+                            crate_name,
+                            "upstream returned non-success status"
                         );
                         Err(StatusCode::NOT_FOUND)
                     }
                     Err(e) => {
-                        tracing::error!("Failed to proxy request to crates.io: {}", e);
+                        tracing::error!(error = %e, "proxy request to upstream failed");
                         Err(StatusCode::INTERNAL_SERVER_ERROR)
                     }
                 }
@@ -290,18 +279,14 @@ pub async fn serve_crate_file(
     AxumPath(filename): AxumPath<String>,
 ) -> Result<Response, StatusCode> {
     if filename.ends_with(".crate") {
-        tracing::info!("Serving crate file: {}", filename);
+        tracing::info!(filename, "serving crate file request");
         let crate_path = state.registry_path.join(&filename);
 
-        tracing::debug!("Looking for crate file at: {}", crate_path.display());
+        tracing::debug!(crate_path = %crate_path.display(), "checking local crate file");
 
         match std::fs::read(&crate_path) {
             Ok(content) => {
-                tracing::info!(
-                    "Successfully served crate file {}, {} bytes",
-                    filename,
-                    content.len()
-                );
+                tracing::info!(filename, bytes = content.len(), "served crate file");
                 let mut response = Response::new(axum::body::Body::from(content));
                 response.headers_mut().insert(
                     axum::http::header::CONTENT_TYPE,
@@ -310,10 +295,10 @@ pub async fn serve_crate_file(
                 Ok(response)
             }
             Err(e) => {
-                tracing::warn!("Failed to read local crate file {}: {}", filename, e);
+                tracing::warn!(filename, error = %e, "local crate file not found");
 
                 if state.enable_proxy {
-                    tracing::info!("Attempting to proxy crate file {} from crates.io", filename);
+                    tracing::info!(filename, "attempting to proxy crate from upstream");
 
                     let crate_info = parse_crate_filename(&filename);
 
@@ -323,7 +308,7 @@ pub async fn serve_crate_file(
                             crate_name, version
                         )
                     } else {
-                        tracing::error!("Invalid crate filename format: {}", filename);
+                        tracing::error!(filename, "invalid crate filename format");
                         return Err(StatusCode::BAD_REQUEST);
                     };
 
@@ -332,9 +317,9 @@ pub async fn serve_crate_file(
                             match response.bytes().await {
                                 Ok(content) => {
                                     tracing::info!(
-                                        "Successfully proxied crate file {} from crates.io, {} bytes",
                                         filename,
-                                        content.len()
+                                        bytes = content.len(),
+                                        "proxied crate from upstream"
                                     );
 
                                     if let Some((crate_name, version)) = crate_info {
@@ -348,8 +333,8 @@ pub async fn serve_crate_file(
 
                                         if let Err(e) = std::fs::write(&crate_path, &content) {
                                             tracing::warn!(
-                                                "Failed to cache crate file locally: {}",
-                                                e
+                                                error = %e,
+                                                "failed caching crate file"
                                             );
                                         }
 
@@ -362,7 +347,7 @@ pub async fn serve_crate_file(
                                         )
                                         .await;
                                     } else if let Err(e) = std::fs::write(&crate_path, &content) {
-                                        tracing::warn!("Failed to cache crate file locally: {}", e);
+                                        tracing::warn!(error = %e, "failed caching crate file");
                                     }
 
                                     let mut response =
@@ -375,8 +360,8 @@ pub async fn serve_crate_file(
                                 }
                                 Err(e) => {
                                     tracing::error!(
-                                        "Failed to read crate response body from crates.io: {}",
-                                        e
+                                        error = %e,
+                                        "failed reading upstream crate response body"
                                     );
                                     Err(StatusCode::INTERNAL_SERVER_ERROR)
                                 }
@@ -384,14 +369,14 @@ pub async fn serve_crate_file(
                         }
                         Ok(response) => {
                             tracing::warn!(
-                                "crates.io returned status {} for crate {}",
-                                response.status(),
-                                filename
+                                status = %response.status(),
+                                filename,
+                                "upstream returned non-success for crate"
                             );
                             Err(StatusCode::NOT_FOUND)
                         }
                         Err(e) => {
-                            tracing::error!("Failed to proxy crate request to crates.io: {}", e);
+                            tracing::error!(error = %e, "crate proxy request to upstream failed");
                             Err(StatusCode::INTERNAL_SERVER_ERROR)
                         }
                     }
@@ -412,10 +397,10 @@ pub async fn serve_file(
     uri: axum::http::Uri,
 ) -> Result<Response, StatusCode> {
     let file_path = uri.path().trim_start_matches('/');
-    tracing::info!("Fallback file request for: {}", file_path);
+    tracing::info!(file_path, "fallback file request");
     let full_path = registry_path.join(file_path);
 
-    tracing::debug!("Looking for file at: {}", full_path.display());
+    tracing::debug!(full_path = %full_path.display(), "checking local file");
 
     if !full_path.starts_with(&registry_path) {
         return Err(StatusCode::FORBIDDEN);
@@ -439,15 +424,11 @@ pub async fn serve_file(
                 );
             }
 
-            tracing::info!(
-                "Successfully served file: {}, {} bytes",
-                file_path,
-                content_len
-            );
+            tracing::info!(file_path, bytes = content_len, "served file");
             Ok(response)
         }
         Err(e) => {
-            tracing::warn!("Failed to read file {}: {}", file_path, e);
+            tracing::warn!(file_path, error = %e, "file not found");
             Err(StatusCode::NOT_FOUND)
         }
     }
@@ -460,7 +441,7 @@ async fn cache_specific_index_version(
     version: &str,
     clean: bool,
 ) {
-    tracing::info!("Caching index entry for {}:{}", crate_name, version);
+    tracing::info!(crate_name, version, "caching index entry");
 
     let index_path = index::get_index_path(registry_path, crate_name);
     let crates_io_url = index::get_crates_io_index_url(crate_name);
@@ -496,33 +477,262 @@ async fn cache_specific_index_version(
                         if let Some(parent) = index_path.parent()
                             && let Err(e) = std::fs::create_dir_all(parent)
                         {
-                            tracing::warn!("Failed to create index directory: {}", e);
+                            tracing::warn!(error = %e, "failed creating index directory");
                             return;
                         }
 
                         if let Err(e) = std::fs::write(&index_path, cached_content.as_bytes()) {
-                            tracing::warn!("Failed to cache index entry: {}", e);
+                            tracing::warn!(error = %e, "failed writing index entry");
                         } else {
-                            tracing::info!(
-                                "Successfully cached index entry for {}:{}",
-                                crate_name,
-                                version
-                            );
+                            tracing::info!(crate_name, version, "index entry cached");
                         }
                         return;
                     }
                 }
-                tracing::warn!("Version {} not found in index for {}", version, crate_name);
+                tracing::warn!(version, crate_name, "version not found in upstream index");
             }
         }
         Ok(response) => {
             tracing::warn!(
-                "Failed to fetch index for caching: status {}",
-                response.status()
+                status = %response.status(),
+                "upstream returned non-success for index fetch"
             );
         }
         Err(e) => {
-            tracing::error!("Failed to fetch index for caching: {}", e);
+            tracing::error!(error = %e, "index fetch from upstream failed");
         }
+    }
+}
+
+/// Check if the local registry contains all dependencies from one or more projects
+pub fn check_registry(
+    projects: &[impl AsRef<Path>],
+    registry_path: impl AsRef<Path>,
+    include_git: bool,
+    config: &cargo::util::GlobalContext,
+) -> CargoResult<()> {
+    use anyhow::Context as _;
+    use cargo::core::Workspace;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::env;
+
+    let projects: Vec<&Path> = projects.iter().map(|p| p.as_ref()).collect();
+    let registry_path = registry_path.as_ref();
+
+    let canonical_registry = registry_path
+        .canonicalize()
+        .unwrap_or_else(|_| registry_path.to_path_buf());
+
+    if !canonical_registry.exists() {
+        anyhow::bail!(
+            "registry path does not exist: {}",
+            canonical_registry.display()
+        );
+    }
+
+    let mut all_required_crates: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut project_count = 0;
+
+    for path in &projects {
+        let (lockfile, project_name) =
+            if path.is_file() && path.file_name() == Some(std::ffi::OsStr::new("Cargo.lock")) {
+                (
+                    path.to_path_buf(),
+                    path.parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                )
+            } else if path.is_dir() {
+                let lock = path.join("Cargo.lock");
+                if !lock.exists() {
+                    tracing::warn!(path = %path.display(), "skipping directory without lockfile");
+                    continue;
+                }
+                (
+                    lock,
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                )
+            } else {
+                tracing::warn!(path = %path.display(), "skipping non-directory, non-lockfile path");
+                continue;
+            };
+
+        if !lockfile.exists() {
+            tracing::warn!(lockfile = %lockfile.display(), "skipping missing lockfile");
+            continue;
+        }
+
+        project_count += 1;
+        tracing::debug!(project_name, lockfile = %lockfile.display(), "processing project dependencies");
+
+        let manifest = lockfile.parent().unwrap().join("Cargo.toml");
+        let manifest = env::current_dir()?.join(&manifest);
+
+        let ws = Workspace::new(&manifest, config)
+            .with_context(|| format!("failed to create workspace for {}", manifest.display()))?;
+        let (packages, resolve) = cargo::ops::resolve_ws(&ws, false).with_context(|| {
+            format!(
+                "failed to resolve dependencies from lockfile: {}",
+                lockfile.display()
+            )
+        })?;
+
+        packages.get_many(resolve.iter()).with_context(|| {
+            format!(
+                "failed to get packages from lockfile: {}",
+                lockfile.display()
+            )
+        })?;
+
+        for id in resolve.iter() {
+            if id.source_id().is_git() {
+                if !include_git {
+                    continue;
+                }
+            } else if !id.source_id().is_registry() {
+                continue;
+            }
+
+            let name = id.name().to_string();
+            let version = id.version().to_string();
+
+            all_required_crates.entry(name).or_default().insert(version);
+        }
+    }
+
+    if project_count == 0 {
+        anyhow::bail!("no valid projects found to check");
+    }
+
+    tracing::debug!(
+        unique_crates = all_required_crates.len(),
+        project_count,
+        "verifying registry against project dependencies"
+    );
+
+    let mut missing_crates = Vec::new();
+    let mut missing_versions = Vec::new();
+
+    for (crate_name, versions) in &all_required_crates {
+        for version in versions {
+            let crate_file = format!("{}-{}.crate", crate_name, version);
+            let crate_path = canonical_registry.join(&crate_file);
+
+            if !crate_path.exists() {
+                missing_crates.push((crate_name.clone(), version.clone()));
+            }
+
+            let index_path = index::get_index_path(&canonical_registry, crate_name);
+            if index_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&index_path) {
+                    let has_version = content.lines().any(|line| {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(line) {
+                            parsed.get("vers").and_then(|v| v.as_str()) == Some(version.as_str())
+                        } else {
+                            false
+                        }
+                    });
+
+                    if !has_version {
+                        missing_versions.push((crate_name.clone(), version.clone()));
+                    }
+                }
+            } else {
+                missing_versions.push((crate_name.clone(), version.clone()));
+            }
+        }
+    }
+
+    let mut extra_crates = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&canonical_registry) {
+        for entry in entries.flatten() {
+            if let Some(filename) = entry.file_name().to_str()
+                && filename.ends_with(".crate")
+                && let Some((crate_name, version)) = parse_crate_filename(filename)
+            {
+                let is_needed = all_required_crates
+                    .get(crate_name)
+                    .map(|versions| versions.contains(version))
+                    .unwrap_or(false);
+
+                if !is_needed {
+                    extra_crates.push((crate_name.to_string(), version.to_string()));
+                }
+            }
+        }
+    }
+
+    let has_issues =
+        !missing_crates.is_empty() || !missing_versions.is_empty() || !extra_crates.is_empty();
+
+    if !has_issues {
+        tracing::info!(
+            crate_count = all_required_crates.len(),
+            "registry verification successful"
+        );
+        Ok(())
+    } else {
+        if !missing_crates.is_empty() {
+            eprintln!("missing crate files:");
+            for (name, version) in &missing_crates {
+                eprintln!("  {}-{}.crate", name, version);
+            }
+            eprintln!();
+        }
+
+        if !missing_versions.is_empty() {
+            eprintln!("missing index entries:");
+            for (name, version) in &missing_versions {
+                eprintln!("  {} version {}", name, version);
+            }
+            eprintln!();
+        }
+
+        if !extra_crates.is_empty() {
+            eprintln!("extra crates not needed by any project:");
+            for (name, version) in &extra_crates {
+                eprintln!("  {}-{}.crate", name, version);
+            }
+            eprintln!();
+        }
+
+        if !missing_crates.is_empty() || !missing_versions.is_empty() {
+            eprintln!("to add missing crates, run:");
+            for project_path in &projects {
+                let lockfile = if project_path.is_file() {
+                    project_path.to_path_buf()
+                } else {
+                    project_path.join("Cargo.lock")
+                };
+
+                if lockfile.exists() {
+                    eprintln!(
+                        "  cargo local-registry create --sync {} {}",
+                        lockfile.display(),
+                        canonical_registry.display()
+                    );
+                }
+            }
+            eprintln!();
+        }
+
+        if !extra_crates.is_empty() {
+            eprintln!("to remove extra crates:");
+            eprintln!("  1. sync all projects without --no-delete flag");
+            eprintln!("  2. or manually delete the .crate files listed above");
+            eprintln!();
+        }
+
+        anyhow::bail!(
+            "registry has {} missing crate(s), {} missing index entry(ies), {} extra crate(s)",
+            missing_crates.len(),
+            missing_versions.len(),
+            extra_crates.len()
+        );
     }
 }

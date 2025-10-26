@@ -19,7 +19,7 @@ use std::path::{self, Path, PathBuf};
 use tar::{Builder, Header};
 use url::Url;
 
-use cargo_local_registry::serve_registry;
+use cargo_local_registry::{check_registry, serve_registry};
 
 const DEFAULT_CRATE_PORT: u16 = 27283;
 
@@ -96,6 +96,20 @@ enum SubCommands {
         /// Disable cleaning old versions when caching new ones (keeps all versions)
         #[arg(long, default_value_t = false)]
         no_clean: bool,
+    },
+
+    // Check if local registry is in sync with project dependencies
+    Check {
+        /// Path(s) to Cargo.lock file(s) or project directories to check
+        #[arg(required = true)]
+        projects: Vec<PathBuf>,
+
+        /// Path to the local registry
+        registry: PathBuf,
+
+        /// Vendor git dependencies as well
+        #[arg(long, default_value_t = false)]
+        git: bool,
     },
 }
 
@@ -187,6 +201,11 @@ async fn main() {
             no_proxy,
             no_clean,
         } => serve_registry(host, port, path, !no_proxy, !no_clean).await,
+        SubCommands::Check {
+            projects,
+            registry,
+            git,
+        } => check_registry(&projects, &registry, git, &config),
     } {
         cargo::exit_with_error(err.into(), &mut config.shell());
     }
