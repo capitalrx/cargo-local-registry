@@ -6,22 +6,9 @@ use std::fs::{self, File};
 use std::io::prelude::*;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{Mutex, MutexGuard, Once};
 
 use serde_json::Value;
 use tempfile::TempDir;
-
-pub static INIT: Once = Once::new();
-pub static mut LOCK: *mut Mutex<()> = 0 as *mut _;
-
-pub fn lock() -> MutexGuard<'static, ()> {
-    unsafe {
-        INIT.call_once(|| {
-            LOCK = Box::into_raw(Box::new(Mutex::new(())));
-        });
-        (*LOCK).lock().unwrap()
-    }
-}
 
 fn cmd() -> Command {
     let mut me = env::current_exe().unwrap();
@@ -33,6 +20,19 @@ fn cmd() -> Command {
     Command::new(me)
 }
 
+fn run(cmd: &mut Command) -> String {
+    let output = cmd.env("RUST_BACKTRACE", "1").output().unwrap();
+    if !output.status.success() {
+        panic!(
+            "failed to run {:?}\n--- stdout\n{}\n--- stderr\n{}",
+            cmd,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 #[test]
 fn help() {
     run(cmd().arg("--help"));
@@ -41,7 +41,6 @@ fn help() {
 
 #[test]
 fn no_sync() {
-    let _l = lock();
     let td = TempDir::new().unwrap();
     let output = run(cmd().arg("create").arg(td.path()));
     assert!(td.path().join("index").exists());
@@ -50,7 +49,6 @@ fn no_sync() {
 
 #[test]
 fn dst_no_exists() {
-    let _l = lock();
     let td = TempDir::new().unwrap();
     let output = run(cmd().arg("create").arg(td.path().join("foo")));
     assert!(td.path().join("foo/index").exists());
@@ -58,8 +56,8 @@ fn dst_no_exists() {
 }
 
 #[test]
+#[serial_test::serial]
 fn empty_cargo_lock() {
-    let _l = lock();
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
     let registry = td.path().join("registry");
@@ -102,8 +100,8 @@ dependencies = []
 }
 
 #[test]
+#[serial_test::serial]
 fn libc_dependency() {
-    let _l = lock();
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
     let registry = td.path().join("registry");
@@ -191,8 +189,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 }
 
 #[test]
+#[serial_test::serial]
 fn git_dependency() {
-    let _l = lock();
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
     let registry = td.path().join("registry");
@@ -246,6 +244,7 @@ source = "git+https://github.com/rust-lang/libc#36bec35aeb600bb1b8b47f4985a84a8d
 }
 
 #[test]
+#[serial_test::serial]
 fn deterministic() {
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
@@ -315,9 +314,6 @@ dependencies = [
 {"name":"libc","vers":"0.2.7","deps":[],"cksum":"4870ef6725dde13394134e587e4ab4eca13cb92e916209a31c851b49131d3c75","features":{"default":[]},"yanked":false}"#
     );
 
-    // A lot of this doesn't look particularity ordered. It's not! This line is
-    // exactly as it appears in the crates.io index. As long as crates.io
-    // doesn't rewrite all the crates we should be fine.
     contents.clear();
     File::open(registry.join("index/fi/le/filetime"))
         .unwrap()
@@ -375,6 +371,7 @@ dependencies = [
 }
 
 #[test]
+#[serial_test::serial]
 fn lowercased() {
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
@@ -435,6 +432,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 }
 
 #[test]
+#[serial_test::serial]
 fn renamed() {
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
@@ -495,6 +493,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 }
 
 #[test]
+#[serial_test::serial]
 fn clean_mode() {
     let td = TempDir::new().unwrap();
     let lock = td.path().join("Cargo.lock");
@@ -567,7 +566,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         r#"{"name":"language-tags","vers":"0.2.2","deps":[{"name":"heapsize","req":">=0.2.2, <0.4","features":[],"optional":true,"default_features":true,"target":null,"kind":null,"package":null},{"name":"heapsize_plugin","req":"^0.1.2","features":[],"optional":true,"default_features":true,"target":null,"kind":null,"package":null}],"cksum":"a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a","features":{"heap_size":["heapsize","heapsize_plugin"],"heapsize":["dep:heapsize"],"heapsize_plugin":["dep:heapsize_plugin"]},"yanked":false}"#
     );
 
-    // Modify the Cargo.toml to swap an existing library, add a new one and delete another
     File::create(td.path().join("Cargo.toml"))
         .unwrap()
         .write_all(
@@ -608,7 +606,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum lazycell 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)" = "b294d6fa9ee409a054354afc4352b0b9ef7ca222c69b8812cbea9e7d2bf3783f"
 "#).unwrap();
 
-    // Run again -- no delete unused
     run(cmd()
         .arg("--no-delete")
         .arg("create")
@@ -652,17 +649,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         r#"{"name":"language-tags","vers":"0.2.2","deps":[{"name":"heapsize","req":">=0.2.2, <0.4","features":[],"optional":true,"default_features":true,"target":null,"kind":null,"package":null},{"name":"heapsize_plugin","req":"^0.1.2","features":[],"optional":true,"default_features":true,"target":null,"kind":null,"package":null}],"cksum":"a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a","features":{"heap_size":["heapsize","heapsize_plugin"],"heapsize":["dep:heapsize"],"heapsize_plugin":["dep:heapsize_plugin"]},"yanked":false}"#
     );
 
-    // Run for the third time -- delete unused (default)
     run(cmd().arg("create").arg(&registry).arg("--sync").arg(&lock));
 
-    // should be deleted
     assert!(!registry.join("language-tags-0.2.2.crate").exists());
-    // should be deleted
     assert!(!registry.join("lazy_static-0.2.11.crate").exists());
     assert!(registry.join("lazy_static-1.2.0.crate").exists());
     assert!(registry.join("lazycell-1.2.1.crate").exists());
 
-    // index and its parent directory should be cleaned, too
     assert!(!registry.join("index").join("la").join("ng").exists());
 
     contents.clear();
@@ -686,37 +679,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     );
 }
 
-fn run(cmd: &mut Command) -> String {
-    let output = cmd.env("RUST_BACKTRACE", "1").output().unwrap();
-    if !output.status.success() {
-        panic!(
-            "failed to run {:?}\n--- stdout\n{}\n--- stderr\n{}",
-            cmd,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    String::from_utf8_lossy(&output.stdout).into_owned()
-}
-
 #[test]
+#[serial_test::serial]
 fn test_checksum_compatibility_with_cratesio() {
-    let _l = lock();
-
-    // Create a temporary directory for our test registry
     let td = TempDir::new().unwrap();
     let registry = td.path().join("registry");
     let lock = td.path().join("Cargo.lock");
     let manifest = td.path().join("Cargo.toml");
 
-    // Create src directory and lib.rs
     fs::create_dir(td.path().join("src")).unwrap();
     File::create(td.path().join("src/lib.rs"))
         .unwrap()
         .write_all(b"")
         .unwrap();
 
-    // Create a sample Cargo.toml
     File::create(&manifest)
         .unwrap()
         .write_all(
@@ -731,7 +707,6 @@ serde_json = "1.0.128"
         )
         .unwrap();
 
-    // Create a sample Cargo.lock with some real dependencies
     File::create(&lock)
         .unwrap()
         .write_all(
@@ -765,19 +740,15 @@ dependencies = [
         )
         .unwrap();
 
-    // Sync from the Cargo.lock file to create our local registry
     run(cmd().arg("create").arg(&registry).arg("--sync").arg(&lock));
 
-    // Verify that the checksums in our local registry match what was in Cargo.lock
     verify_checksums_match_lock_file(&registry, &lock);
 }
 
 fn verify_checksums_match_lock_file(registry_path: &Path, lock_path: &Path) {
-    // Parse the Cargo.lock file to extract expected checksums
     let lock_content = fs::read_to_string(lock_path).unwrap();
     let expected_checksums = parse_lock_file_checksums(&lock_content);
 
-    // Check each crate in our local registry
     for (name_version, expected_checksum) in &expected_checksums {
         let parts: Vec<&str> = name_version.split(':').collect();
         if parts.len() != 2 {
@@ -785,15 +756,13 @@ fn verify_checksums_match_lock_file(registry_path: &Path, lock_path: &Path) {
         }
         let (crate_name, version) = (parts[0], parts[1]);
 
-        // Read the local index file
         let crate_path = get_crate_index_path(registry_path, crate_name);
         if !crate_path.exists() {
-            panic!("Local index file not found for crate: {}", crate_name);
+            panic!("local index file not found for crate: {}", crate_name);
         }
 
         let index_content = fs::read_to_string(&crate_path).unwrap();
 
-        // Find the specific version in the index
         let mut found_checksum = None;
         for line in index_content.lines() {
             if line.trim().is_empty() {
@@ -817,13 +786,13 @@ fn verify_checksums_match_lock_file(registry_path: &Path, lock_path: &Path) {
             Some(actual_checksum) => {
                 assert_eq!(
                     &actual_checksum, expected_checksum,
-                    "Checksum mismatch for {}:{}\n  Expected: {}\n  Actual:   {}",
+                    "checksum mismatch for {}:{}\n  expected: {}\n  actual:   {}",
                     crate_name, version, expected_checksum, actual_checksum
                 );
             }
             None => {
                 panic!(
-                    "Version {} not found in local registry for crate {}",
+                    "version {} not found in local registry for crate {}",
                     version, crate_name
                 );
             }
@@ -849,7 +818,6 @@ fn parse_lock_file_checksums(content: &str) -> HashMap<String, String> {
                 checksums.insert(format!("{}:{}", name, version), checksum);
             }
         } else if line.starts_with("[[package]]") {
-            // Reset for next package
             current_name = None;
             current_version = None;
         }
@@ -857,18 +825,16 @@ fn parse_lock_file_checksums(content: &str) -> HashMap<String, String> {
 
     checksums
 }
+
 fn get_crate_index_path(registry_path: &Path, crate_name: &str) -> std::path::PathBuf {
     let index_path = registry_path.join("index");
 
     match crate_name.len() {
         1 => index_path.join("1").join(crate_name),
         2 => index_path.join("2").join(crate_name),
-        3 => index_path
-            .join("3")
-            .join(&crate_name[0..1])
-            .join(crate_name),
+        3 => index_path.join("3").join(&crate_name[..1]).join(crate_name),
         _ => {
-            let prefix = format!("{}/{}", &crate_name[0..2], &crate_name[2..4]);
+            let prefix = format!("{}/{}", &crate_name[..2], &crate_name[2..4]);
             index_path.join(prefix).join(crate_name)
         }
     }

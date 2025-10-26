@@ -247,7 +247,6 @@ async fn test_aws_lambda_events_path_specifically() {
 async fn test_crate_filename_with_digit_suffix() {
     let registry = create_test_registry().await;
 
-    // Create sec1-0.7.3.crate in the registry
     let sec1_crate = registry.path().join("sec1-0.7.3.crate");
     File::create(&sec1_crate)
         .unwrap()
@@ -269,7 +268,6 @@ async fn test_crate_filename_with_digit_suffix() {
 async fn test_crate_filename_with_complex_version() {
     let registry = create_test_registry().await;
 
-    // Create curl-sys-0.4.80+curl-8.12.1.crate in the registry
     let curl_sys_crate = registry.path().join("curl-sys-0.4.80+curl-8.12.1.crate");
     File::create(&curl_sys_crate)
         .unwrap()
