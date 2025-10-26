@@ -76,7 +76,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
     run(cmd().arg("create").arg(&registry).arg("--sync").arg(&lock));
 
-    run(cmd().arg("check").arg(td.path()).arg(&registry));
+    run(cmd().arg("check").arg(&registry).arg(td.path()));
 }
 
 #[test]
@@ -147,8 +147,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let output = Command::new(cmd().get_program())
         .args(cmd().get_args())
         .arg("check")
-        .arg(td.path())
         .arg(&registry)
+        .arg(td.path())
         .output()
         .unwrap();
 
@@ -214,8 +214,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let output = Command::new(cmd().get_program())
         .args(cmd().get_args())
         .arg("check")
-        .arg(td.path())
         .arg(&registry)
+        .arg(td.path())
         .output()
         .unwrap();
 
@@ -285,8 +285,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let output = Command::new(cmd().get_program())
         .args(cmd().get_args())
         .arg("check")
-        .arg(td.path())
         .arg(&registry)
+        .arg(td.path())
         .output()
         .unwrap();
 
@@ -359,8 +359,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let output = Command::new(cmd().get_program())
         .args(cmd().get_args())
         .arg("check")
-        .arg(td.path())
         .arg(&registry)
+        .arg(td.path())
         .output()
         .unwrap();
 
@@ -479,9 +479,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
     run(cmd()
         .arg("check")
+        .arg(registry.path())
         .arg(td1.path())
-        .arg(td2.path())
-        .arg(registry.path()));
+        .arg(td2.path()));
 }
 
 #[test]
@@ -578,9 +578,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let output = Command::new(cmd().get_program())
         .args(cmd().get_args())
         .arg("check")
+        .arg(registry.path())
         .arg(td1.path())
         .arg(td2.path())
-        .arg(registry.path())
         .output()
         .unwrap();
 
@@ -649,8 +649,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     let output = Command::new(cmd().get_program())
         .args(cmd().get_args())
         .arg("check")
-        .arg(td.path())
         .arg(&registry)
+        .arg(td.path())
         .output()
         .unwrap();
 

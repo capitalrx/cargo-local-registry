@@ -65,12 +65,36 @@ This command will:
 * Place all downloads in `path/to/registry`
 * Prepare the index of `path/to/registry` to reflect all this information
 
+### Verification
+
+Another operation is verifying that a local registry contains all necessary
+dependencies for a set of projects. This can be done via
+
+```
+cargo local-registry check path/to/registry path/to/project1 path/to/project2
+```
+
+This command will:
+
+* Resolve all dependencies for the specified projects
+* Verify the local registry contains the necessary crate files
+* Verify the index contains entries for all required versions
+* Report any discrepancies found
+
+If all dependencies are present, the command will exit successfully with no
+output. If any dependencies are missing or extra crates are found, errors will
+be reported on stderr and the command will exit with a non-zero status
+
 ### Local http server
 
 An alternative approach is to serve the offline repository through a
 local http server.  This may be preferred as the baseline file service
 will build files sequentially and the http server can be setup as a sparse,
 which will download and build in parallel.
+
+```
+cargo local-registry serve /path/to/registry
+```
 
 This server defaults to proxying to crates.io and then will cache used
 crates locally within the offline server.  It is designed to be a long
