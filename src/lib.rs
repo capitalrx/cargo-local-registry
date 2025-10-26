@@ -1,7 +1,6 @@
-mod crates;
-mod index;
-mod parsing;
-mod types;
+mod utils;
+
+pub use utils::*;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
@@ -26,8 +25,24 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tar::{Builder, Header};
 
-use parsing::parse_crate_filename;
-pub use types::{CachedIndex, DEFAULT_REFRESH_TTL_SECS, ExecutionControl};
+pub const DEFAULT_REFRESH_TTL_SECS: u64 = 15 * 60; // 15 minutes
+
+#[derive(Clone)]
+pub struct CachedIndex {
+    pub content: bytes::Bytes,
+    pub last_check: Instant,
+}
+
+#[derive(Clone)]
+pub struct ExecutionControl {
+    pub registry_path: PathBuf,
+    pub server_url: String,
+    pub reqwest_client: Client,
+    pub enable_proxy: bool,
+    pub clean: bool,
+    pub index_cache: Arc<RwLock<HashMap<String, CachedIndex>>>,
+    pub cache_ttl: Duration,
+}
 
 pub async fn serve_registry(
     host: String,
@@ -101,7 +116,7 @@ pub async fn serve_index_generic(
     let crate_name = path.split('/').next_back().unwrap_or(&path).to_string();
     tracing::info!(crate_name, path, "serving index request");
     let crate_name = crate_name.to_lowercase();
-    let index_path = index::get_index_path(&registry_path, &crate_name);
+    let index_path = get_index_path(&registry_path, &crate_name);
 
     tracing::debug!(index_path = %index_path.display(), "checking local index");
 
@@ -140,7 +155,7 @@ pub async fn serve_index_generic(
         if should_try_refresh {
             tracing::info!(crate_name, "attempting fast fetch from upstream");
 
-            let crates_io_url = index::get_crates_io_index_url(&crate_name);
+            let crates_io_url = get_crates_io_index_url(&crate_name);
 
             let fast_fail_duration = Duration::from_millis(500);
 
@@ -224,7 +239,7 @@ pub async fn serve_index_generic(
             if enable_proxy {
                 tracing::info!(crate_name, "attempting full proxy to upstream");
 
-                let crates_io_url = index::get_crates_io_index_url(&crate_name);
+                let crates_io_url = get_crates_io_index_url(&crate_name);
 
                 match reqwest_client.get(&crates_io_url).send().await {
                     Ok(response) if response.status().is_success() => {
@@ -336,7 +351,7 @@ pub async fn serve_crate_file(
 
                                     if let Some((crate_name, version)) = crate_info {
                                         if state.clean {
-                                            crates::remove_prior_versions(
+                                            remove_prior_versions(
                                                 &state.registry_path,
                                                 crate_name,
                                                 version,
@@ -455,8 +470,8 @@ async fn cache_specific_index_version(
 ) {
     tracing::info!(crate_name, version, "caching index entry");
 
-    let index_path = index::get_index_path(registry_path, crate_name);
-    let crates_io_url = index::get_crates_io_index_url(crate_name);
+    let index_path = get_index_path(registry_path, crate_name);
+    let crates_io_url = get_crates_io_index_url(crate_name);
 
     match client.get(&crates_io_url).send().await {
         Ok(response) if response.status().is_success() => {
@@ -631,7 +646,7 @@ pub fn determine_registry_delta(
                 missing_crates.push((name.clone(), version.clone()));
             }
 
-            let index_path = index::get_index_path(&canonical_registry, name);
+            let index_path = get_index_path(&canonical_registry, name);
             if let Ok(content) = std::fs::read_to_string(&index_path) {
                 let has_version = content.lines().any(|line| {
                     line.contains(&format!("\"vers\":\"{}\"", version))
@@ -1141,7 +1156,7 @@ pub fn read_index_entry(
         .canonicalize()
         .unwrap_or_else(|_| registry_path.to_path_buf());
 
-    let index_path = index::get_index_path(&canonical_registry, name);
+    let index_path = get_index_path(&canonical_registry, name);
 
     if !index_path.exists() {
         return Ok(Vec::new());
@@ -1167,7 +1182,7 @@ pub fn update_index_entry(
         .canonicalize()
         .unwrap_or_else(|_| registry_path.to_path_buf());
 
-    let index_path = index::get_index_path(&canonical_registry, name);
+    let index_path = get_index_path(&canonical_registry, name);
 
     std::fs::create_dir_all(index_path.parent().unwrap())?;
 
