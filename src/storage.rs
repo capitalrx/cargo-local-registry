@@ -687,6 +687,63 @@ pub fn update_index_entry(
     Ok(())
 }
 
+fn report_registry_issues(delta: &RegistryDelta, registry_path: &Path, projects: &[&Path]) {
+    if !delta.missing_crates.is_empty() {
+        eprintln!("missing crate files:");
+        for (name, version) in &delta.missing_crates {
+            eprintln!("  {}-{}.crate", name, version);
+        }
+        eprintln!();
+    }
+
+    if !delta.missing_versions.is_empty() {
+        eprintln!("missing index entries:");
+        for (name, version) in &delta.missing_versions {
+            eprintln!("  {} version {}", name, version);
+        }
+        eprintln!();
+    }
+
+    if !delta.extra_crates.is_empty() {
+        eprintln!("extra crates not needed by any project:");
+        for (name, version) in &delta.extra_crates {
+            eprintln!("  {}-{}.crate", name, version);
+        }
+        eprintln!();
+    }
+
+    if delta.has_missing() {
+        let canonical_registry = registry_path
+            .canonicalize()
+            .unwrap_or_else(|_| registry_path.to_path_buf());
+
+        eprintln!("to add missing crates, run:");
+        for project_path in projects {
+            let lockfile = if project_path.is_file() {
+                project_path.to_path_buf()
+            } else {
+                project_path.join("Cargo.lock")
+            };
+
+            if lockfile.exists() {
+                eprintln!(
+                    "  cargo local-registry create --sync {} {}",
+                    lockfile.display(),
+                    canonical_registry.display()
+                );
+            }
+        }
+        eprintln!();
+    }
+
+    if !delta.extra_crates.is_empty() {
+        eprintln!("to remove extra crates:");
+        eprintln!("  1. sync all projects without --no-delete flag");
+        eprintln!("  2. or manually delete the .crate files listed above");
+        eprintln!();
+    }
+}
+
 /// check if the local registry contains all dependencies from one or more projects
 pub fn check_registry(
     projects: &[impl AsRef<Path>],
@@ -708,72 +765,20 @@ pub fn check_registry(
         if !delta.extra_crates.is_empty() {
             remove_extra_crates(&delta, &registry_path)?;
         }
-        Ok(())
-    } else {
-        if !delta.missing_crates.is_empty() {
-            eprintln!("missing crate files:");
-            for (name, version) in &delta.missing_crates {
-                eprintln!("  {}-{}.crate", name, version);
-            }
-            eprintln!();
-        }
-
-        if !delta.missing_versions.is_empty() {
-            eprintln!("missing index entries:");
-            for (name, version) in &delta.missing_versions {
-                eprintln!("  {} version {}", name, version);
-            }
-            eprintln!();
-        }
-
-        if !delta.extra_crates.is_empty() {
-            eprintln!("extra crates not needed by any project:");
-            for (name, version) in &delta.extra_crates {
-                eprintln!("  {}-{}.crate", name, version);
-            }
-            eprintln!();
-        }
-
-        if delta.has_missing() {
-            let registry_path = registry_path.as_ref();
-            let canonical_registry = registry_path
-                .canonicalize()
-                .unwrap_or_else(|_| registry_path.to_path_buf());
-
-            eprintln!("to add missing crates, run:");
-            let projects: Vec<&Path> = projects.iter().map(|p| p.as_ref()).collect();
-            for project_path in &projects {
-                let lockfile = if project_path.is_file() {
-                    project_path.to_path_buf()
-                } else {
-                    project_path.join("Cargo.lock")
-                };
-
-                if lockfile.exists() {
-                    eprintln!(
-                        "  cargo local-registry create --sync {} {}",
-                        lockfile.display(),
-                        canonical_registry.display()
-                    );
-                }
-            }
-            eprintln!();
-        }
-
-        if !delta.extra_crates.is_empty() {
-            eprintln!("to remove extra crates:");
-            eprintln!("  1. sync all projects without --no-delete flag");
-            eprintln!("  2. or manually delete the .crate files listed above");
-            eprintln!();
-        }
-
-        anyhow::bail!(
-            "registry has {} missing crate(s), {} missing index entry(ies), {} extra crate(s)",
-            delta.missing_crates.len(),
-            delta.missing_versions.len(),
-            delta.extra_crates.len()
-        );
+        return Ok(());
     }
+
+    let registry_path = registry_path.as_ref();
+    let projects: Vec<&Path> = projects.iter().map(|p| p.as_ref()).collect();
+
+    report_registry_issues(&delta, registry_path, &projects);
+
+    anyhow::bail!(
+        "registry has {} missing crate(s), {} missing index entry(ies), {} extra crate(s)",
+        delta.missing_crates.len(),
+        delta.missing_versions.len(),
+        delta.extra_crates.len()
+    );
 }
 
 pub fn create_registry(
