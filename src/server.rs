@@ -53,6 +53,7 @@ pub async fn serve_registry(
         cache_ttl: Duration::from_secs(DEFAULT_REFRESH_TTL_SECS),
     };
 
+    // only setup for sparse index caching
     let app = Router::new()
         .route("/index/config.json", get(serve_config))
         .route("/index/{*path}", get(serve_index_generic))

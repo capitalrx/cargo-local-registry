@@ -34,7 +34,7 @@ struct Options {
 
 #[derive(clap::Parser)]
 enum SubCommands {
-    // Create a local registry
+    /// Create a local registry
     Create {
         /// Path to Cargo.lock to sync from
         #[arg(long)]
@@ -44,7 +44,7 @@ enum SubCommands {
         path: String,
     },
 
-    // Serve local registry over HTTP
+    /// Serve local registry over HTTP
     Serve {
         /// Host to bind to
         #[arg(long, default_value = "127.0.0.1")]
@@ -66,7 +66,7 @@ enum SubCommands {
         no_clean: bool,
     },
 
-    // Check if local registry is in sync with project dependencies
+    /// Check if local registry is in sync with project dependencies
     Check {
         /// Path to the local registry
         registry: PathBuf,
@@ -94,7 +94,7 @@ async fn main() {
         )
         .init();
 
-    // We're doing the vendoring operation outselves, so we don't actually want
+    // We're doing the vendoring operation ourselves, so we don't actually want
     // to respect any of the `source` configuration in Cargo itself. That's
     // intended for other consumers of Cargo, but we want to go straight to the
     // source, e.g. crates.io, to fetch crates.

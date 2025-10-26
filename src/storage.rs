@@ -204,7 +204,7 @@ pub fn add_missing_crates(
                 &canonical_registry,
                 &registry_id,
                 include_git,
-                false, // sync_public_deps = false
+                false,
                 config,
             )?;
         }
